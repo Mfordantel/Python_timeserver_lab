@@ -1,91 +1,67 @@
 import json
-import pytz
-import tzlocal
-import paste.httpserver
-import pandas
-import datetime
+from tzlocal import get_localzone
+from datetime import datetime
+from pytz import timezone
+from paste.httpserver import serve
 
-def do_get(data):
-    answer = "\tTime is "
-    if not data:
-        data = None
-    else:
+
+def time_server(environ, start_response):
+
+    #Method GET
+
+    if environ['REQUEST_METHOD'] == 'GET':
+        getTZ = environ['PATH_INFO'][1:]
+        if not getTZ:
+            getTZ = None
+            text = 'Time - '
+        else:
+            try:
+                getTZ = timezone(getTZ)
+                text = 'Time in %s - ' % getTZ
+            except UnknownTimeZoneError:
+                start_response('200 OK', [('Content-Type', 'text/plain')])
+                return [b'Error: Unknown Time Zone']
+
+        start_response('200 OK', [('Content-Type', 'text/plain')])
+        return [bytes(text + datetime.now(getTZ).strftime('%H:%M:%S'), encoding='utf-8')]
+
+    #Method POST
+
+    elif environ['REQUEST_METHOD'] == 'POST':
+        data = environ['wsgi.input'].read().decode("utf-8")
+        data = json.loads(data)
         try:
-            data = pytz.timezone(data)
-        except pytz.UnknownTimeZoneError:
-            answer = '\tError in time zone'
-            return answer
-    answer += datetime.datetime.now(tz = data).time().isoformat()
-    return answer
+            timezone1 = timezone(data['tz_start'])
+        except KeyError:
+            timezone1 = get_localzone()
+        try:
+            timezone2 = timezone(data['tz_end'])
+        except KeyError:
+            timezone2 = get_localzone()
+        try:
+            type = data['type']
+        except:
+            start_response('200 OK', [('Content-Type', 'text/plain')])
+            return [bytes('Error in type Data', encoding='utf-8')]
+        time_now = datetime.now(timezone1)
+        tz1 = datetime.now(timezone1).utcoffset()
+        tz2 = datetime.now(timezone2).utcoffset()
+        if tz1 < tz2:
+            dif = tz2 - tz1
+        else:
+            dif = '-' + str(tz1 - tz2)
+        dif = str(dif)
+        if data['type'] == 'time':
+            start_response('200 OK', [('Content-Type', 'text/plain')])
+            return [bytes(json.dumps({'time': datetime.now(timezone1).strftime('%H:%M:%S'), 'timezone': str(timezone1)}), encoding='utf-8')]
+        elif data['type'] == 'date':
+            start_response('200 OK', [('Content-Type', 'text/plain')])
+            return [bytes(json.dumps({'date': datetime.now(timezone1).strftime('%d.%m.%Y'), 'timezone': str(timezone1)}), encoding='utf-8')]
+        elif data['type'] == 'datedif':
+            start_response('200 OK', [('Content-Type', 'text/plain')])
+            return [bytes(json.dumps({'time_diff': dif, 'timezone1': str(timezone1), 'timezone2': str(timezone2)}), encoding='utf-8')]
 
-def do_post(data):
-    if not isjson(data):
-        answer = 'Error in json format'
-        return answer
-    else:
-        data = json.loads(data)
-        if(data['type'] == 'time'):
-            answer = post_time(data)
-        elif(data['type'] == 'date'):
-            answer = post_date(data)
-        elif (data['type'] == 'datediff'):
-            answer = post_datediff(data)
-        return answer
 
-def isjson(data):
-    answer = True
-    try:
-        data = json.loads(data)
-    except json.JSONDecodeError:
-        answer = False
-    return answer
+serve(time_server)
 
-def post_time(data):
-    try:
-        tz = pytz.timezone(data['tz'])
-    except KeyError:
-        tz = None
-    if not tz:
-        tz = tzlocal.get_localzone()
-    return json.dumps({'tz': str(tz), 'time': datetime.datetime.now(tz = tz).time().isoformat()})
 
-def post_date(data):
-    try:
-        tz = pytz.timezone(data['tz'])
-    except KeyError:
-        tz = None
-    if not tz:
-        tz = tzlocal.get_localzone()
-    return json.dumps({'tz': str(tz), 'date': datetime.datetime.now(tz = tz).date().isoformat()})
-
-def post_datediff(data):
-    try:
-        first_tz = pytz.timezone(data['start'])
-    except KeyError:
-        first_tz = None
-    if not first_tz:
-        first_tz = tzlocal.get_localzone()
-    try:
-        second_tz = pytz.timezone(data['end'])
-    except KeyError:
-        second_tz = None
-    if not second_tz:
-        second_tz = tzlocal.get_localzone()
-    date = pandas.to_datetime(datetime.datetime.now(tz = first_tz).date().isoformat())
-    if first_tz.localize(date) >= second_tz.localize(date):
-        delta = (first_tz.localize(date) - second_tz.localize(date).astimezone(first_tz)).seconds/3600
-    else:
-        delta = -(24 - ((first_tz.localize(date) - second_tz.localize(date).astimezone(first_tz)).seconds / 3600))
-    return json.dumps({'datediff': delta, 'start': str(first_tz), 'end': str(second_tz)})
-
-def run_server(env, start_response):
-    if env['REQUEST_METHOD'] == 'GET':
-        data = env['PATH_INFO'][1:]
-        answer = do_get(data)
-    if env['REQUEST_METHOD'] == 'POST':
-        data = env['wsgi.input']
-        answer = do_post(data.read().decode("utf-8"))
-    start_response('200 OK', [('Content-Type', 'text/plain')])
-    return [bytes(answer, encoding='utf-8')]
-
-paste.httpserver.serve(run_server)
